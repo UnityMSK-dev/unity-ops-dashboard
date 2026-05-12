@@ -4465,7 +4465,14 @@ async function saveWeek() {
     }
   }
 
-  const payload = { weekEnding, entity, data: nextValues };
+  // Scope hint so the backend can merge against the live record and
+  // ignore stale snapshot values for the opposite mode. Without this,
+  // a PT save can clobber concurrent ortho updates (and vice versa) —
+  // the frontend's "preserve opposite mode" guard only sees the
+  // snapshot loaded when the form first opened, not whatever else
+  // landed in storage since.
+  const mode = entityHasPtEntry() ? "pt" : "ortho";
+  const payload = { weekEnding, entity, mode, data: nextValues };
 
   setStatus("Saving...");
   setDebug({

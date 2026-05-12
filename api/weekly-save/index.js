@@ -116,6 +116,16 @@ module.exports = async function (context, req) {
         : req.body?.values && typeof req.body.values === "object"
           ? req.body.values
           : {};
+    // Save scope: "ortho", "pt", or "all" (default). When the form is in
+    // PT mode the client only knows about PT fields — ortho fields in
+    // the payload may be stale snapshots from when the form first
+    // loaded. If we trust those naively, a PT save can clobber a
+    // concurrent ortho save (Annette flagged Tim wiping NES ortho data
+    // 2026-05-05). Server-side scope-aware merge fixes the race: we
+    // re-read the live record and overlay only the in-scope fields
+    // from the request.
+    const mode = String(req.body?.mode || "all").toLowerCase();
+    const SCOPE = mode === "pt" ? "pt" : mode === "ortho" ? "ortho" : "all";
 
     if (!entity || !weekEnding) {
       return {
@@ -141,7 +151,51 @@ module.exports = async function (context, req) {
       }
     }
 
-    const values = calculateDerived(input);
+    // Merge against the live record so a PT save can never clobber
+    // ortho values (and vice versa). Read the canonical snapshot from
+    // either valuesJson (preferred — full shape) or the explicit
+    // columns on the row.
+    const ORTHO_FIELDS = [
+      "newPatients", "surgeries", "established", "noShows", "cancelled",
+      "totalCalls", "abandonedCalls", "cashCollected",
+      "piNp", "piCashCollection", "imaging", "reschedules"
+    ];
+    const PT_FIELDS = [
+      "ptScheduledVisits", "ptCancellations", "ptNoShows", "ptReschedules",
+      "ptTotalUnitsBilled", "ptVisitsSeen", "ptWorkingDays"
+    ];
+    const SHARED_FIELDS = ["ptoDays", "operationsNarrative"];
+
+    let existingValues = {};
+    if (existing) {
+      try {
+        existingValues = existing.valuesJson
+          ? JSON.parse(String(existing.valuesJson))
+          : { ...existing };
+      } catch (_) {
+        existingValues = { ...existing };
+      }
+    }
+
+    const inScope = (field) => {
+      if (SCOPE === "all") return true;
+      if (SHARED_FIELDS.includes(field)) return true;
+      if (SCOPE === "pt") return PT_FIELDS.includes(field);
+      if (SCOPE === "ortho") return ORTHO_FIELDS.includes(field);
+      return false;
+    };
+
+    // Start with the live record, overlay only the in-scope fields from
+    // the request. Out-of-scope fields keep their existing values
+    // regardless of what the client sent.
+    const mergedInput = { ...existingValues };
+    [...ORTHO_FIELDS, ...PT_FIELDS, ...SHARED_FIELDS].forEach((field) => {
+      if (inScope(field) && input[field] !== undefined) {
+        mergedInput[field] = input[field];
+      }
+    });
+
+    const values = calculateDerived(mergedInput);
 
     await table.upsertEntity({
       partitionKey: entity,
