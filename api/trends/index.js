@@ -60,7 +60,15 @@ function normalizeWeeklyValues(values = {}, record = null) {
     ptVisitsPerDay: toNumber(values.ptVisitsPerDay ?? record?.ptVisitsPerDay, 0),
 
     imaging: toNumber(values.imaging ?? record?.imaging, 0),
-    reschedules: toNumber(values.reschedules ?? record?.reschedules, 0)
+    reschedules: toNumber(values.reschedules ?? record?.reschedules, 0),
+    // SpineOne PI fields — feed the Personal Injury trend chart on the
+    // Trends view. Same pattern as imaging/reschedules: the data lives
+    // in WeeklyRegionData (entered via the SpineOne PI section of the
+    // weekly form), but if normalizeWeeklyValues drops them the
+    // trends endpoint returns zeros and the chart looks blank even
+    // though storage is fine.
+    piNp: toNumber(values.piNp ?? record?.piNp, 0),
+    piCashCollection: toNumber(values.piCashCollection ?? record?.piCashCollection, 0)
   };
 }
 
@@ -105,6 +113,9 @@ function mapRecord(record) {
 
     imaging: values.imaging,
     reschedules: values.reschedules,
+
+    piNp: values.piNp,
+    piCashCollection: values.piCashCollection,
 
     createdBy: toText(record.createdBy),
     createdAt: toText(record.createdAt),
