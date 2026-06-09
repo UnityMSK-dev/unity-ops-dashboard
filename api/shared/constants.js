@@ -40,7 +40,9 @@ const REGION_USER_MAP = {
 
   // Admins
   "nperez@unitymsk.com":       { entity: "admin", role: "admin" },
-  "tessa.kelley@spineone.com": { entity: "admin", role: "admin" }
+  "tessa.kelley@spineone.com": { entity: "admin", role: "admin" },
+  "mfoster@unitymsk.com":      { entity: "admin", role: "admin" },  // Mike Foster
+  "mike.foster@unitymsk.com":  { entity: "admin", role: "admin" }   // Mike Foster, alias
 };
 
 const WEEKLY_TABLE = "WeeklyRegionData";
