@@ -1209,8 +1209,16 @@ function renderDashboardCards(current, comparison, compareAgainst, entityScope, 
   const ptVisitsCurrent = normalizeNumber(current.ptTotals?.visitsSeen);
   const ptVisitsComparison = normalizeNumber(comparison.ptTotals?.visitsSeen);
 
-  const avgNoShow = averageMetric(current.regions, "noShowRate");
-  const avgCancel = averageMetric(current.regions, "cancellationRate");
+  // Use volume-weighted rates from totals (computed in aggregator)
+  // instead of per-entity rate averages. The simple averaging let a
+  // low-volume entity (e.g. NES ortho with 11 visits and 139
+  // cancelled → 68% cancellation rate) drag the dashboard rate
+  // around, producing a "25% dashboard cancellation vs 13.2% on the
+  // entry form" mismatch that didn't reflect actual patient activity.
+  // Volume-weighted = pool numerators and denominators, divide once;
+  // matches the per-entity entry math scaled to cross-entity share.
+  const avgNoShow = normalizeNumber(current.totals?.weightedNoShowRate);
+  const avgCancel = normalizeNumber(current.totals?.weightedCancellationRate);
   const avgCxnsCombined = avgNoShow + avgCancel;
 
   // Total Visits = ortho + PT + imaging. Mirrors the budget-side
@@ -1302,7 +1310,7 @@ function renderDashboardCards(current, comparison, compareAgainst, entityScope, 
     },
     {
       label: "Avg Abandoned %",
-      value: `${averageMetric(current.regions, "abandonedCallRate").toFixed(1)}%`,
+      value: `${normalizeNumber(current.totals?.weightedAbandonedCallRate).toFixed(1)}%`,
       meta: "Across selected scope",
       className: "kpi-neutral"
     }
@@ -3744,6 +3752,16 @@ function aggregateExecutiveSummaries(summaries, entityScope, options = {}) {
           ptoDays: 0,
           piNp: 0,
           piCashCollection: 0,
+          // Raw counts for volume-weighted rate aggregation. Per-entity
+          // noShowRate averaging across regions misleads when one entity
+          // has very low denominator (e.g. NES ortho with visitVolume=11
+          // and cancelled=139 → cancellationRate=68%, which then drags
+          // the simple average across all entities away from reality).
+          // Pool the raw counts, divide once at the totals level.
+          established: 0,
+          noShows: 0,
+          cancelled: 0,
+          abandonedCalls: 0,
           noShowRateTotal: 0,
           cancellationRateTotal: 0,
           abandonedCallRateTotal: 0,
@@ -3778,6 +3796,11 @@ function aggregateExecutiveSummaries(summaries, entityScope, options = {}) {
       row.ptoDays += normalizeNumber(region.ptoDays);
       row.piNp += normalizeNumber(region.piNp);
       row.piCashCollection += normalizeNumber(region.piCashCollection);
+      // Raw counts that feed volume-weighted dashboard rates downstream.
+      row.established += normalizeNumber(region.established);
+      row.noShows += normalizeNumber(region.noShows);
+      row.cancelled += normalizeNumber(region.cancelled);
+      row.abandonedCalls += normalizeNumber(region.abandonedCalls);
       row.noShowRateTotal += normalizeNumber(region.noShowRate);
       row.cancellationRateTotal += normalizeNumber(region.cancellationRate);
       row.abandonedCallRateTotal += normalizeNumber(region.abandonedCallRate);
@@ -3832,6 +3855,10 @@ function aggregateExecutiveSummaries(summaries, entityScope, options = {}) {
     ptoDays: row.ptoDays,
     piNp: row.piNp,
     piCashCollection: row.piCashCollection,
+    established: row.established,
+    noShows: row.noShows,
+    cancelled: row.cancelled,
+    abandonedCalls: row.abandonedCalls,
     noShowRate: row.weekCount ? row.noShowRateTotal / row.weekCount : 0,
     cancellationRate: row.weekCount ? row.cancellationRateTotal / row.weekCount : 0,
     abandonedCallRate: row.weekCount ? row.abandonedCallRateTotal / row.weekCount : 0,
@@ -3865,8 +3892,27 @@ function aggregateExecutiveSummaries(summaries, entityScope, options = {}) {
     cashCollected: regions.reduce((sum, r) => sum + normalizeNumber(r.cashCollected), 0),
     ptoDays: regions.reduce((sum, r) => sum + normalizeNumber(r.ptoDays), 0),
     piNp: regions.reduce((sum, r) => sum + normalizeNumber(r.piNp), 0),
-    piCashCollection: regions.reduce((sum, r) => sum + normalizeNumber(r.piCashCollection), 0)
+    piCashCollection: regions.reduce((sum, r) => sum + normalizeNumber(r.piCashCollection), 0),
+    established: regions.reduce((sum, r) => sum + normalizeNumber(r.established), 0),
+    noShows: regions.reduce((sum, r) => sum + normalizeNumber(r.noShows), 0),
+    cancelled: regions.reduce((sum, r) => sum + normalizeNumber(r.cancelled), 0),
+    abandonedCalls: regions.reduce((sum, r) => sum + normalizeNumber(r.abandonedCalls), 0)
   };
+
+  // Volume-weighted dashboard rates. Pool the raw counts across every
+  // entity, then divide once — so a tiny-volume entity (e.g. NES with
+  // 11 ortho visits and 139 cancelled) can't drag the dashboard
+  // average around. Matches the math each entity sees on its own
+  // weekly entry form, scaled by relative contribution to total
+  // activity. Replaces the simple-average-of-per-entity-rates
+  // approach that was producing the "13.2% on entry vs 25% on
+  // dashboard" discrepancy Tony flagged.
+  const scheduledAppts = totals.visitVolume + totals.noShows + totals.cancelled;
+  totals.weightedNoShowRate    = scheduledAppts > 0 ? Number(((totals.noShows    / scheduledAppts) * 100).toFixed(2)) : 0;
+  totals.weightedCancellationRate = scheduledAppts > 0 ? Number(((totals.cancelled / scheduledAppts) * 100).toFixed(2)) : 0;
+  totals.weightedAbandonedCallRate = totals.callVolume > 0
+    ? Number(((totals.abandonedCalls / totals.callVolume) * 100).toFixed(2))
+    : 0;
 
   const sumReg = (k) => regions.reduce((sum, r) => sum + normalizeNumber(r[k]), 0);
   const budgetTotals = includeBudget
