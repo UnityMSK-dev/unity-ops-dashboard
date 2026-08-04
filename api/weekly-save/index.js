@@ -18,6 +18,30 @@ function toText(value, fallback = "") {
   return String(value).trim();
 }
 
+// Snap ANY YYYY-MM-DD date to the nearest prior Friday. Belt-and-
+// suspenders against the client-side snap failing — we've had users
+// accidentally save to Saturday (2026-04-18 Tim, 2026-06-13 Tim,
+// 2026-08-01 Annette) and Sunday, spawning orphan rows the form
+// never loads back into view. Once the server enforces it, no path
+// can create a non-Friday weekly row regardless of what the client
+// does. Returns { normalized, wasSnapped } so callers can log or
+// echo the correction. Passes through invalid inputs unchanged so
+// existing input validation catches them.
+function snapToFriday(weekEnding) {
+  if (!weekEnding || !/^\d{4}-\d{2}-\d{2}$/.test(String(weekEnding))) {
+    return { normalized: weekEnding, wasSnapped: false };
+  }
+  const d = new Date(weekEnding + "T12:00:00Z");
+  if (Number.isNaN(d.getTime())) {
+    return { normalized: weekEnding, wasSnapped: false };
+  }
+  const day = d.getUTCDay(); // 0=Sun, 5=Fri
+  if (day === 5) return { normalized: weekEnding, wasSnapped: false };
+  const shift = day < 5 ? -(day + 2) : -(day - 5);
+  d.setUTCDate(d.getUTCDate() + shift);
+  return { normalized: d.toISOString().slice(0, 10), wasSnapped: true };
+}
+
 function calculateDerived(values = {}) {
   const newPatients = toNumber(values.newPatients, 0);
   const surgeries = toNumber(values.surgeries, 0);
@@ -109,7 +133,15 @@ module.exports = async function (context, req) {
     if (authError) return authError;
 
     const entity = String(req.body?.entity || "").trim();
-    const weekEnding = String(req.body?.weekEnding || "").trim();
+    const rawWeekEnding = String(req.body?.weekEnding || "").trim();
+    // Snap to nearest prior Friday so a client bug (non-firing snap
+    // handler, keyboard entry that bypasses change events, restored
+    // draft with a stale Saturday date) can't spawn orphan rows the
+    // form never loads back.
+    const { normalized: weekEnding, wasSnapped } = snapToFriday(rawWeekEnding);
+    if (wasSnapped) {
+      try { console.warn(`weekly-save: snapped ${rawWeekEnding} → ${weekEnding} for ${entity} (submitted by ${access?.email || user?.userDetails || "?"})`); } catch (_) {}
+    }
     const input =
       req.body?.data && typeof req.body.data === "object"
         ? req.body.data
